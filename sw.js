@@ -1,7 +1,7 @@
 /* Tudás-sziget – offline gyorsítótár.
  * Stratégia: azonnal a tárolt változatot adja (offline is megy), közben a háttérben frissít,
  * így egy új verzió a következő megnyitáskor jelenik meg. */
-const CACHE = 'tudas-sziget-v1';
+const CACHE = 'tudas-sziget-v2';
 const CORE = [
   './', './index.html', './manifest.webmanifest', './css/style.css', './js/app.js',
   './js/data/matek.js', './js/data/nyelvtan.js', './js/data/irodalom.js', './js/data/kornyezet.js', './js/data/angol.js',

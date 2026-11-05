@@ -179,25 +179,63 @@
   function questsReady() { ensureDaily(); return S.daily.quests.filter(q => { const d = QUESTS.find(x => x.id === q.id); return d && !q.claimed && q.prog >= d.goal; }).length + (S.daily.chest ? 0 : 1); }
 
   /* ---------- Hang ---------- */
-  let AC = null;
-  function tone(f, dur, type, vol, delay) {
-    const t0 = AC.currentTime + (delay || 0); const o = AC.createOscillator(); const g = AC.createGain();
-    o.type = type || 'sine'; o.frequency.setValueAtTime(f, t0);
-    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol || 0.15, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
-    o.connect(g).connect(AC.destination); o.start(t0); o.stop(t0 + dur + 0.05);
+  /* Modern, lágy UI-hangok: marimba/csengő jellegű szintézis (szinusz + felhangok, gyors felfutás,
+     exponenciális lecsengés), aluláteresztő szűrő, enyhe zengetés és kompresszor. Nincs négyszögjel. */
+  let AC = null, OUT = null, REV = null;
+  function audioInit() {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    const comp = AC.createDynamicsCompressor(); comp.threshold.value = -18; comp.ratio.value = 4;
+    const master = AC.createGain(); master.gain.value = 0.9; master.connect(comp).connect(AC.destination);
+    const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 5200; lp.connect(master);
+    OUT = lp;
+    // rövid, puha zengetés zajból generált impulzusválasszal
+    const len = Math.floor(AC.sampleRate * 1.3), ir = AC.createBuffer(2, len, AC.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.2); }
+    const conv = AC.createConvolver(); conv.buffer = ir; const wet = AC.createGain(); wet.gain.value = 0.22;
+    conv.connect(wet).connect(master); REV = conv;
+  }
+  // egy „ütött” hang: alaphang + marimba-felhangok (4x, 10x) gyorsabban lecsengve
+  function bell(f, t, dur, vol, opt) {
+    opt = opt || {}; const t0 = AC.currentTime + (t || 0);
+    const parts = opt.parts || [[1, 1], [2.01, 0.18], [4.0, 0.12]];
+    const env = AC.createGain(); env.connect(OUT); if (opt.rev !== false) env.connect(REV);
+    env.gain.setValueAtTime(0.0001, t0); env.gain.exponentialRampToValueAtTime(vol, t0 + (opt.att || 0.006)); env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    parts.forEach(([m, a], i) => {
+      const o = AC.createOscillator(), g = AC.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(f * m, t0);
+      if (opt.glide) o.frequency.exponentialRampToValueAtTime(f * m * opt.glide, t0 + dur * 0.6);
+      g.gain.setValueAtTime(a, t0); if (i) g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur * 0.35);
+      o.connect(g).connect(env); o.start(t0); o.stop(t0 + dur + 0.05);
+    });
+  }
+  // puha „buborék” koppanás (gombnyomás, elem lerakása)
+  function blip(f1, f2, t, dur, vol) {
+    const t0 = AC.currentTime + (t || 0); const o = AC.createOscillator(), g = AC.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(f1, t0); o.frequency.exponentialRampToValueAtTime(f2, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g).connect(OUT); o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+  // lágy akkord-felület (győzelem, szintlépés alá)
+  function chord(freqs, t, dur, vol) {
+    const t0 = AC.currentTime + (t || 0); const g = AC.createGain(); g.connect(OUT); g.connect(REV);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + 0.25); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    freqs.forEach(f => [-4, 4].forEach(dt => { const o = AC.createOscillator(); o.type = 'triangle'; o.frequency.value = f; o.detune.value = dt; o.connect(g); o.start(t0); o.stop(t0 + dur + 0.05); }));
   }
   function sfx(n) {
     if (!S.settings.sound) return;
     try {
-      if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+      if (!AC) audioInit();
       if (AC.state === 'suspended') AC.resume();
-      if (n === 'click') tone(660, 0.06, 'sine', 0.06);
-      else if (n === 'ok') { tone(523, 0.12, 'triangle', 0.18); tone(784, 0.22, 'triangle', 0.18, 0.1); }
-      else if (n === 'bad') { tone(300, 0.15, 'sine', 0.12); tone(220, 0.25, 'sine', 0.12, 0.13); }
-      else if (n === 'coin') { tone(988, 0.08, 'square', 0.06); tone(1319, 0.2, 'square', 0.06, 0.08); }
-      else if (n === 'level') [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.25, 'triangle', 0.16, i * 0.1));
-      else if (n === 'win') [392, 523, 659, 784, 659, 784, 1047].forEach((f, i) => tone(f, 0.22, 'triangle', 0.15, i * 0.11));
-      else if (n === 'pop') tone(880, 0.08, 'sine', 0.1);
+      const C5 = 523.25, E5 = 659.25, G5 = 783.99, A5 = 880, B5 = 987.77, C6 = 1046.5, D6 = 1174.66, E6 = 1318.5, G6 = 1567.98;
+      switch (n) {
+        case 'click': blip(900, 600, 0, 0.05, 0.05); break;
+        case 'pop': blip(500, 950, 0, 0.07, 0.09); break;
+        case 'ok': bell(G5, 0, 0.5, 0.22); bell(D6, 0.085, 0.75, 0.2); break;
+        case 'bad': bell(330, 0, 0.32, 0.16, { parts: [[1, 1], [2, 0.08]], glide: 0.94, rev: false }); bell(262, 0.13, 0.45, 0.14, { parts: [[1, 1], [2, 0.06]], glide: 0.95, rev: false }); break;
+        case 'coin': [E6, G6, C6 * 2].forEach((f, i) => bell(f, i * 0.06, 0.45, 0.09, { parts: [[1, 1], [2.76, 0.15]] })); break;
+        case 'level': chord([C5, E5, G5], 0, 1.6, 0.05); [C5, E5, G5, C6, E6].forEach((f, i) => bell(f, 0.05 + i * 0.09, 0.9, 0.17)); bell(G6, 0.55, 1.2, 0.08, { parts: [[1, 1], [2.76, 0.2]] }); break;
+        case 'win': chord([C5, E5, G5, B5], 0, 2.2, 0.05); [G5, C6, E6, D6, G6].forEach((f, i) => bell(f, 0.08 + i * 0.11, 1.0, 0.15)); [E6, G6, C6 * 2].forEach((f, i) => bell(f, 0.7 + i * 0.05, 0.8, 0.06, { parts: [[1, 1], [2.76, 0.2]] })); break;
+        case 'star': bell(A5 * Math.pow(2, (arguments[1] || 0) * 4 / 12), 0, 0.6, 0.16); break;
+      }
     } catch (e) { }
   }
   function speak(text) {
@@ -766,7 +804,7 @@
       </div>
       <div class="mascot-row"><span class="mascot bounce">🦉</span><div class="bubble">${st >= 2 || bossWin ? 'Büszke vagyok rád! Huhu! 🎉' : 'A hibás kérdéseket betettem az Ismétlő dobozba. Ott újra próbálhatod őket! 🔁'}</div></div>
     </div>`, 'results-screen');
-    [0, 1, 2].forEach(i => { if (i < st) setTimeout(() => sfx('pop'), 300 + i * 350); });
+    [0, 1, 2].forEach(i => { if (i < st) setTimeout(() => sfx('star', i), 300 + i * 350); });
     if (st === 3 || bossWin) { setTimeout(() => { sfx('win'); confetti(); }, 1200); }
     showLevelUp(lv);
   }
